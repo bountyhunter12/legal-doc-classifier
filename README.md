@@ -20,6 +20,11 @@ the model can be plugged into a web app, a notebook, or a CI smoke test
 without changes.
 
 ---
+## User Interface
+
+<img width="1841" height="837" alt="image" src="https://github.com/user-attachments/assets/7fe6ac28-bb26-4ca1-96c7-a7b5f2d05575" />
+
+
 
 ## Architecture
 
