@@ -1,0 +1,34 @@
+# ============================================================
+# Render Blueprint for the Legal Document Classifier.
+#
+# Drop this file in the repo root, then go to
+#   https://dashboard.render.com/blueprints
+# and click "New Blueprint Instance" pointing at this repo.
+# Render will read this file, create the web service, and deploy it.
+#
+# After the Blueprint creates the service, set the
+# HF_MODEL_ID env var in the Render dashboard (or via `render env`)
+# to a Hugging Face Hub repo that holds the Legal-BERT weights,
+# e.g.  HF_MODEL_ID=bountyhunter12/legal-bert-scotus
+# ============================================================
+services:
+  - type: web
+    name: legal-doc-classifier
+    runtime: docker
+    plan: free
+    region: oregon
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      # The image already sets PORT, but Render overrides it via
+      # the runtime contract. Either value is fine; Render wins.
+      - key: PORT
+        value: 10000
+      # Tell the app where to download the 418 MB model from at
+      # runtime. Set this to your own Hub repo. The model will
+      # download on first cold boot, then live in /tmp inside the
+      # container — exactly how HF Spaces handles the same files.
+      - key: HF_MODEL_ID
+        value: bountyhunter12/legal-bert-scotus
+      # If the Hub repo is private, set HF_TOKEN to a read-only
+      # access token (Dashboard > Environment > Add Secret).

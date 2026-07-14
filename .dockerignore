@@ -1,19 +1,41 @@
-# Exclude the local FastAPI/Compose stack from the (no-longer-used)
-# Docker image. The Gradio Space boots straight from app.py, so we
-# only need the model code + saved_model/ + the Gradio front-end.
-Dockerfile
+# ============================================================
+# Files excluded from the Docker build context on Render.
+#
+# We deliberately drop the 418 MB trained model — it is loaded
+# at runtime from Hugging Face Hub via $HF_MODEL_ID, not shipped
+# in the image. We also drop docker-compose, Prometheus / Grafana
+# stacks, scripts, docs and editor metadata so the build stays
+# small and fast.
+# ============================================================
+
+# Trained model weights (download from Hub at runtime instead)
+saved_model/
+*.safetensors
+*.bin
+*.pt
+
+# Local / non-prod stacks
 docker-compose.yml
 prometheus.yml
 grafana/
-scripts/check_*.ps1
-scripts/probe_queries.ps1
-scripts/reload_dashboard.ps1
-scripts/payload.json
-index.html
-app/main.py
+
+# Utility scripts and helper files
+scripts/
+
+# Editor / VCS noise
 .git/
 .gitignore
+.gitkeep
 .puku/
+.vscode/
+.idea/
+
+# Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+
+# Logs and archives
 *.log
+*.zip
+mlruns/

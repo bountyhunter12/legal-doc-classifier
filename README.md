@@ -1221,3 +1221,153 @@ curl -X POST https://<your-hf-username>-legal-classifier.hf.space/predict \
 - Need full Prometheus + Grafana observability? Re-deploy the whole stack
   to Render (see the README on the bounty repo) and keep using the HF Hub
   model repo as the source of truth for the weights.
+
+---
+
+# Chapter 8: Deploying to Render (Free)
+
+> **Why this chapter exists.** Hugging Face Spaces is great, but you
+> may want a normal URL (`https://<your-app>.onrender.com`) that just
+> serves the FastAPI app. Render offers a free tier that never asks
+> for a credit card; the only limit is that the service spins down
+> after 15 minutes of inactivity and takes ~30 seconds to boot back
+> up. That is fine for a demo. We use the same Hub-fallback trick as
+> Chapter 7 so the 418 MB checkpoint does not enter the build
+> context.
+
+## What you will end up with
+
+1. The `legal-doc-classifier` repo deployed on Render's free plan.
+2. A URL of the form `https://legal-doc-classifier.onrender.com`
+   that responds with the FastAPI app, the embedded UI, `/health`,
+   `/predict`, and `/metrics`.
+3. Render auto-deploys every time you push to the connected branch,
+   so future changes go live with one `git push`.
+
+## Step 1: Push your code to GitHub
+
+Make sure the repo is on GitHub first. Render builds directly from
+GitHub, not from your laptop.
+
+```bash
+git init                                 # only if not already a repo
+git add .
+git commit -m "Deploy to Render"
+git branch -M main
+git remote add origin https://github.com/<your-username>/legal-doc-classifier.git
+git push -u origin main
+```
+
+If the repo already exists on GitHub and your branch diverged,
+pull first, resolve any conflicts, then push:
+
+```bash
+git pull origin main --allow-unrelated-histories
+# fix any merge markers, then:
+git add .
+git commit -m "Merge origin/main"
+git push -u origin main
+```
+
+## Step 2: Create the Web Service on Render
+
+1. Go to <https://dashboard.render.com> and sign in with GitHub.
+2. Click **New +** -> **Web Service**.
+3. Pick the `legal-doc-classifier` repo. If Render cannot see it,
+   click **Configure account** and grant access to the right GitHub
+   account / org.
+4. Fill in the form:
+   - **Name**: `legal-doc-classifier` (becomes the subdomain)
+   - **Region**: pick one close to you
+   - **Branch**: `main`
+   - **Runtime**: **Docker** (we ship a `Dockerfile`)
+   - **Instance Type**: **Free**
+   - **Health Check Path**: `/health`
+5. Click **Advanced** and add one environment variable:
+
+   | Key           | Value                                  |
+   |---------------|----------------------------------------|
+   | `HF_MODEL_ID` | `<your-hf-username>/legal-bert-scotus` |
+
+   If the Hub repo is private, add a second secret (`HF_TOKEN`)
+   instead of an env var; Render keeps secrets encrypted.
+6. Click **Create Web Service**. Render will start building the image
+   immediately.
+
+> **Alternative: Blueprint one-click deploy.** This repo contains a
+> `render.yaml` file. Visit <https://dashboard.render.com/blueprints>,
+> click **New Blueprint Instance**, and point it at the same repo.
+> Render provisions everything in the table above for you.
+
+## Step 3: Wait for the first deploy
+
+The first build takes about 3-5 minutes:
+
+1. Render builds the image from `Dockerfile`.
+2. The image starts uvicorn on `0.0.0.0:$PORT` (`$PORT` defaults to
+   10000 on the free plan).
+3. uvicorn imports `app.main:app`, which calls
+   `model_loader.load()`. Because `./saved_model/` is intentionally
+   not present, the loader falls back to
+   `huggingface_hub.snapshot_download` using `HF_MODEL_ID`.
+4. The 418 MB model lands in `/tmp/hf_cache/` inside the container.
+   The first `/predict` call downloads + warms up the model; later
+   calls are sub-second.
+
+The "live" tab in the Render dashboard will show the log output.
+When you see `Application startup complete. Uvicorn running on...`,
+the app is ready.
+
+## Step 4: Verify
+
+```bash
+# Liveness probe
+curl https://legal-doc-classifier.onrender.com/health
+# -> {"status":"ok"}
+
+# Prediction
+curl -X POST https://legal-doc-classifier.onrender.com/predict \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"The defendant was charged with assault and battery."}'
+# -> {"label":"Criminal Procedure","confidence":0.91}
+
+# Metrics (Prometheus text format)
+curl https://legal-doc-classifier.onrender.com/metrics
+```
+
+Open the root URL in a browser to see the embedded UI. Because the
+HTML reads `window.HF_SPACE_CONFIG` to find the API URL, it works
+unchanged on Render (the Render domain is a valid same-origin
+target, so no CORS gymnastics are needed).
+
+## What changes between local and Render
+
+| Concern           | Local                         | Render free                      |
+|-------------------|-------------------------------|----------------------------------|
+| Port              | 8000                          | `$PORT` (defaults to 10000)      |
+| Model location    | `./saved_model/` shipped      | Downloaded from HF Hub on boot   |
+| Sleep behaviour   | Always on                     | Spins down after 15 min idle     |
+| Cold start        | None                          | ~30 s (downloads the model)      |
+| Disk              | Your machine                  | Container ephemeral (re-downloads on every cold start) |
+
+The 30-second cold start is the main trade-off, and it only happens
+when nobody has hit the URL in the previous 15 minutes. Once awake,
+the service is fast and stays up until idle again.
+
+## When the free tier is not enough
+
+- Need always-on? Upgrade to the **Starter** plan (~$7/mo).
+- Need a GPU? Render does not sell GPU instances; use a Hugging Face
+  Space with T4/A10G hardware instead (Chapter 7).
+- Need Prometheus + Grafana dashboards? Run the full `docker-compose`
+  stack on a free Oracle Cloud / Fly.io VM.
+
+## Troubleshooting
+
+| Problem                          | Solution                                              |
+|----------------------------------|-------------------------------------------------------|
+| Build fails: `COPY saved_model/` | The `.dockerignore` excludes the model on purpose; if you see this error, you forgot to commit the updated `.dockerignore` |
+| `ModuleNotFoundError: app`       | Make sure `app/__init__.py` exists and the `Dockerfile` `COPY`s `app/` as a directory |
+| `OSError: not a safetensors file`| Wrong `HF_MODEL_ID`; confirm the Hub repo holds the `model.safetensors` checkpoint |
+| App boots but `/predict` 500s   | Cold-start download timed out; open the URL once and wait 60 s, then retry |
+| CORS error in the browser        | The HTML is served by the same origin as the API on Render; if you split them across hosts, you must add the front-end origin to the CORS allow-list in `app/main.py` |
